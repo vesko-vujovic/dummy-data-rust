@@ -1,3 +1,5 @@
+mod dummy_data_with_autoincremented_id;
+
 use clap::Parser;
 use fake::faker::address::{en::*, *};
 use fake::faker::company::en::*;
@@ -15,6 +17,7 @@ use std::io::Write;
 use std::path::Path;
 use uuid::Uuid;
 use chrono;
+use csv::Writer;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -33,6 +36,9 @@ struct Args {
 
     #[clap(short, long, default_value = "output")]
     output_dir: String,
+
+    #[clap(short, long, default_value = "json", value_parser = ["json", "csv"])]
+    format: String,
 }
 
 #[derive(Serialize)]
@@ -68,9 +74,38 @@ struct Transaction {
     timestamp: String,
 }
 
-fn create_file(dir: &str, name: &str) -> File {
-    let path = Path::new(dir).join(name);
-    File::create(&path).expect(&format!("Unable to create file: {:?}", path))
+enum FileWriter {
+    Json(File),
+    Csv(Writer<File>),
+}
+
+impl FileWriter {
+    fn write<T: Serialize>(&mut self, record: &T) -> std::io::Result<()> {
+        match self {
+            FileWriter::Json(file) => {
+                writeln!(file, "{}", serde_json::to_string(record).unwrap())
+            }
+            FileWriter::Csv(writer) => {
+                writer.serialize(record).unwrap();
+                Ok(())
+            }
+        }
+    }
+}
+
+fn create_writer(dir: &str, name: &str, format: &str) -> FileWriter {
+    let extension = format;
+    let filename = format!("{}.{}", name, extension);
+    let path = Path::new(dir).join(filename);
+    match format {
+        "json" => FileWriter::Json(
+            File::create(&path).expect(&format!("Unable to create file: {:?}", path))
+        ),
+        "csv" => FileWriter::Csv(
+            csv::Writer::from_path(&path).expect(&format!("Unable to create CSV file: {:?}", path))
+        ),
+        _ => panic!("Unsupported format: {}", format),
+    }
 }
 
 fn main() {
@@ -79,10 +114,10 @@ fn main() {
     std::fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
     let mut rng = rand::thread_rng();
-    let mut users_file = create_file(&args.output_dir, "users.jsonl");
-    let mut addresses_file = create_file(&args.output_dir, "addresses.jsonl");
-    let mut providers_file = create_file(&args.output_dir, "providers.jsonl");
-    let mut transactions_file = create_file(&args.output_dir, "transactions.jsonl");
+    let mut users_writer = create_writer(&args.output_dir, "users", &args.format);
+    let mut addresses_writer = create_writer(&args.output_dir, "addresses", &args.format);
+    let mut providers_writer = create_writer(&args.output_dir, "providers", &args.format);
+    let mut transactions_writer = create_writer(&args.output_dir, "transactions", &args.format);
 
     let progress_style = ProgressStyle::default_bar()
         .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
@@ -103,7 +138,7 @@ fn main() {
                 email: format!("{}@{}.com", name.to_lowercase().replace(' ', "."), FreeEmail().fake::<String>()),
                 phone: PhoneNumber().fake(),
             };
-            writeln!(users_file, "{}", serde_json::to_string(&user).unwrap()).unwrap();
+            users_writer.write(&user).unwrap();
             users_pb.inc(1);
             user
         })
@@ -124,7 +159,7 @@ fn main() {
             country: CountryName().fake(),
             postal_code: PostCode().fake(),
         };
-        writeln!(addresses_file, "{}", serde_json::to_string(&address).unwrap()).unwrap();
+        addresses_writer.write(&address).unwrap();
         addresses_pb.inc(1);
     }
     addresses_pb.finish_with_message("Addresses completed");
@@ -146,7 +181,7 @@ fn main() {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: real_providers.choose(&mut rng).unwrap().to_string(),
             };
-            writeln!(providers_file, "{}", serde_json::to_string(&provider).unwrap()).unwrap();
+            providers_writer.write(&provider).unwrap();
             providers_pb.inc(1);
             provider
         })
@@ -175,11 +210,11 @@ fn main() {
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
 
-        writeln!(transactions_file, "{}", serde_json::to_string(&transaction).unwrap()).unwrap();
+        transactions_writer.write(&transaction).unwrap();
         transactions_count += 1;
         transactions_pb.inc(1);
     }
     transactions_pb.finish_with_message("Transactions completed");
 
-    println!("Data generation complete. Output saved to {} directory", args.output_dir);
+    println!("Data generation complete. Output saved to {} directory in {} format", args.output_dir, args.format);
 }
