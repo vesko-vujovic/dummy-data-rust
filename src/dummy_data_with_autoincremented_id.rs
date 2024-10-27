@@ -1,5 +1,3 @@
-mod dummy_data_with_autoincremented_id;
-
 use clap::Parser;
 use fake::faker::address::{en::*, *};
 use fake::faker::company::en::*;
@@ -15,9 +13,15 @@ use serde::Serialize;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use uuid::Uuid;
+use std::sync::atomic::{AtomicI64, Ordering};
 use chrono;
-use csv::Writer;
+
+// Global counter for ID 
+static GLOBAL_COUNTER: AtomicI64 = AtomicI64::new(1);
+
+fn get_next_id() -> i64 {
+    GLOBAL_COUNTER.fetch_add(1, Ordering::SeqCst)
+}
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -39,11 +43,14 @@ struct Args {
 
     #[clap(short, long, default_value = "json", value_parser = ["json", "csv"])]
     format: String,
+
+    #[clap(short = 'i', long, default_value_t = 1)]
+    start_id: i64,
 }
 
 #[derive(Serialize)]
 struct User {
-    id: String,
+    id: i64,
     name: String,
     email: String,
     phone: String,
@@ -51,7 +58,8 @@ struct User {
 
 #[derive(Serialize)]
 struct Address {
-    user_id: String,
+    id: i64,
+    user_id: i64,
     street: String,
     city: String,
     state: String,
@@ -61,15 +69,15 @@ struct Address {
 
 #[derive(Serialize)]
 struct PaymentProvider {
-    id: String,
+    id: i64,
     name: String,
 }
 
 #[derive(Serialize)]
 struct Transaction {
-    id: String,
-    user_id: String,
-    provider_id: String,
+    id: i64,
+    user_id: i64,
+    provider_id: i64,
     amount: f64,
     timestamp: String,
 }
@@ -111,6 +119,8 @@ fn create_writer(dir: &str, name: &str, format: &str) -> FileWriter {
 fn main() {
     let args = Args::parse();
 
+    GLOBAL_COUNTER.store(args.start_id, Ordering::SeqCst);
+
     std::fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
     let mut rng = rand::thread_rng();
@@ -124,7 +134,6 @@ fn main() {
         .unwrap()
         .progress_chars("##-");
 
-    // Generate users
     let users_pb = ProgressBar::new(args.users as u64);
     users_pb.set_style(progress_style.clone());
     users_pb.set_message("Generating Users");
@@ -133,7 +142,7 @@ fn main() {
         .map(|_| {
             let name: String = Name().fake();
             let user = User {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: get_next_id(),
                 name: name.clone(),
                 email: format!("{}@{}.com", name.to_lowercase().replace(' ', "."), FreeEmail().fake::<String>()),
                 phone: PhoneNumber().fake(),
@@ -145,14 +154,14 @@ fn main() {
         .collect();
     users_pb.finish_with_message("Users completed");
 
-    // Generate addresses
     let addresses_pb = ProgressBar::new(args.users as u64);
     addresses_pb.set_style(progress_style.clone());
     addresses_pb.set_message("Generating Addresses");
 
     for user in &users {
         let address = Address {
-            user_id: user.id.clone(),
+            id: get_next_id(),
+            user_id: user.id,
             street: StreetName().fake(),
             city: CityName().fake(),
             state: StateName().fake(),
@@ -178,7 +187,7 @@ fn main() {
     let providers: Vec<PaymentProvider> = (0..args.providers)
         .map(|_| {
             let provider = PaymentProvider {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: get_next_id(),
                 name: real_providers.choose(&mut rng).unwrap().to_string(),
             };
             providers_writer.write(&provider).unwrap();
@@ -196,16 +205,16 @@ fn main() {
     let mut transactions_count = 0;
     while transactions_count < args.transactions {
         let user_index = if args.skewed {
-            // Use a power-law distribution for skewed data
+
             (rng.gen::<f64>().powi(3) * users.len() as f64) as usize
         } else {
             rng.gen_range(0..users.len())
         };
 
         let transaction = Transaction {
-            id: uuid::Uuid::new_v4().to_string(),
-            user_id: users[user_index].id.clone(),
-            provider_id: providers[rng.gen_range(0..providers.len())].id.clone(),
+            id: get_next_id(),
+            user_id: users[user_index].id,
+            provider_id: providers[rng.gen_range(0..providers.len())].id,
             amount: rng.gen_range(1.0..1000.0),
             timestamp: chrono::Utc::now().to_rfc3339(),
         };
