@@ -23,7 +23,7 @@ A versatile command-line tool written in Rust for generating synthetic data for 
 2. Clone the repository:
 ```bash
 git clone [repository-url]
-cd synthetic-data-generator
+cd dummy-data-rust
 ```
 
 3. Add the following dependencies to your `Cargo.toml`:
