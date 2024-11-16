@@ -15,8 +15,9 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use chrono;
+use csv;  // Added this import
 
-// Global counter for ID 
+// Global counter for ID
 static GLOBAL_COUNTER: AtomicI64 = AtomicI64::new(1);
 
 fn get_next_id() -> i64 {
@@ -84,7 +85,7 @@ struct Transaction {
 
 enum FileWriter {
     Json(File),
-    Csv(Writer<File>),
+    Csv(csv::Writer<File>),  // Fixed: Properly specified the Writer type
 }
 
 impl FileWriter {
@@ -173,7 +174,6 @@ fn main() {
     }
     addresses_pb.finish_with_message("Addresses completed");
 
-    // Generate payment providers
     let providers_pb = ProgressBar::new(args.providers as u64);
     providers_pb.set_style(progress_style.clone());
     providers_pb.set_message("Generating Providers");
@@ -197,7 +197,6 @@ fn main() {
         .collect();
     providers_pb.finish_with_message("Providers completed");
 
-    // Generate transactions
     let transactions_pb = ProgressBar::new(args.transactions as u64);
     transactions_pb.set_style(progress_style.clone());
     transactions_pb.set_message("Generating Transactions");
@@ -205,7 +204,6 @@ fn main() {
     let mut transactions_count = 0;
     while transactions_count < args.transactions {
         let user_index = if args.skewed {
-
             (rng.gen::<f64>().powi(3) * users.len() as f64) as usize
         } else {
             rng.gen_range(0..users.len())
