@@ -15,12 +15,41 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use chrono;
+use csv;
 
-// Global counter for ID 
-static GLOBAL_COUNTER: AtomicI64 = AtomicI64::new(1);
+// Separate counters for each entity
+struct EntityCounters {
+    user_id: AtomicI64,
+    address_id: AtomicI64,
+    provider_id: AtomicI64,
+    transaction_id: AtomicI64,
+}
 
-fn get_next_id() -> i64 {
-    GLOBAL_COUNTER.fetch_add(1, Ordering::SeqCst)
+impl EntityCounters {
+    fn new(start_id: i64) -> Self {
+        Self {
+            user_id: AtomicI64::new(start_id),
+            address_id: AtomicI64::new(start_id),
+            provider_id: AtomicI64::new(start_id),
+            transaction_id: AtomicI64::new(start_id),
+        }
+    }
+
+    fn next_user_id(&self) -> i64 {
+        self.user_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn next_address_id(&self) -> i64 {
+        self.address_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn next_provider_id(&self) -> i64 {
+        self.provider_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn next_transaction_id(&self) -> i64 {
+        self.transaction_id.fetch_add(1, Ordering::SeqCst)
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -44,8 +73,18 @@ struct Args {
     #[clap(short, long, default_value = "json", value_parser = ["json", "csv"])]
     format: String,
 
-    #[clap(short = 'i', long, default_value_t = 1)]
-    start_id: i64,
+    // Separate start IDs for each entity
+    #[clap(long, default_value_t = 1)]
+    user_start_id: i64,
+
+    #[clap(long, default_value_t = 1)]
+    address_start_id: i64,
+
+    #[clap(long, default_value_t = 1)]
+    provider_start_id: i64,
+
+    #[clap(long, default_value_t = 1)]
+    transaction_start_id: i64,
 }
 
 #[derive(Serialize)]
@@ -84,7 +123,7 @@ struct Transaction {
 
 enum FileWriter {
     Json(File),
-    Csv(Writer<File>),
+    Csv(csv::Writer<File>),
 }
 
 impl FileWriter {
@@ -119,7 +158,12 @@ fn create_writer(dir: &str, name: &str, format: &str) -> FileWriter {
 fn main() {
     let args = Args::parse();
 
-    GLOBAL_COUNTER.store(args.start_id, Ordering::SeqCst);
+    // Initialize counters with their respective start IDs
+    let counters = EntityCounters::new(1);
+    counters.user_id.store(args.user_start_id, Ordering::SeqCst);
+    counters.address_id.store(args.address_start_id, Ordering::SeqCst);
+    counters.provider_id.store(args.provider_start_id, Ordering::SeqCst);
+    counters.transaction_id.store(args.transaction_start_id, Ordering::SeqCst);
 
     std::fs::create_dir_all(&args.output_dir).expect("Unable to create output directory");
 
@@ -134,6 +178,7 @@ fn main() {
         .unwrap()
         .progress_chars("##-");
 
+    // Generate Users
     let users_pb = ProgressBar::new(args.users as u64);
     users_pb.set_style(progress_style.clone());
     users_pb.set_message("Generating Users");
@@ -142,7 +187,7 @@ fn main() {
         .map(|_| {
             let name: String = Name().fake();
             let user = User {
-                id: get_next_id(),
+                id: counters.next_user_id(),
                 name: name.clone(),
                 email: format!("{}@{}.com", name.to_lowercase().replace(' ', "."), FreeEmail().fake::<String>()),
                 phone: PhoneNumber().fake(),
@@ -154,13 +199,14 @@ fn main() {
         .collect();
     users_pb.finish_with_message("Users completed");
 
+    // Generate Addresses
     let addresses_pb = ProgressBar::new(args.users as u64);
     addresses_pb.set_style(progress_style.clone());
     addresses_pb.set_message("Generating Addresses");
 
     for user in &users {
         let address = Address {
-            id: get_next_id(),
+            id: counters.next_address_id(),
             user_id: user.id,
             street: StreetName().fake(),
             city: CityName().fake(),
@@ -173,7 +219,7 @@ fn main() {
     }
     addresses_pb.finish_with_message("Addresses completed");
 
-    // Generate payment providers
+    // Generate Providers
     let providers_pb = ProgressBar::new(args.providers as u64);
     providers_pb.set_style(progress_style.clone());
     providers_pb.set_message("Generating Providers");
@@ -187,7 +233,7 @@ fn main() {
     let providers: Vec<PaymentProvider> = (0..args.providers)
         .map(|_| {
             let provider = PaymentProvider {
-                id: get_next_id(),
+                id: counters.next_provider_id(),
                 name: real_providers.choose(&mut rng).unwrap().to_string(),
             };
             providers_writer.write(&provider).unwrap();
@@ -197,7 +243,7 @@ fn main() {
         .collect();
     providers_pb.finish_with_message("Providers completed");
 
-    // Generate transactions
+    // Generate Transactions
     let transactions_pb = ProgressBar::new(args.transactions as u64);
     transactions_pb.set_style(progress_style.clone());
     transactions_pb.set_message("Generating Transactions");
@@ -205,14 +251,13 @@ fn main() {
     let mut transactions_count = 0;
     while transactions_count < args.transactions {
         let user_index = if args.skewed {
-
             (rng.gen::<f64>().powi(3) * users.len() as f64) as usize
         } else {
             rng.gen_range(0..users.len())
         };
 
         let transaction = Transaction {
-            id: get_next_id(),
+            id: counters.next_transaction_id(),
             user_id: users[user_index].id,
             provider_id: providers[rng.gen_range(0..providers.len())].id,
             amount: rng.gen_range(1.0..1000.0),

@@ -2,3 +2,5 @@
 .DS_Store
 data/
 my_data/
+.idea
+output/
